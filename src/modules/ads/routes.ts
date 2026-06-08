@@ -236,18 +236,29 @@ router.patch("/:id", requireAuth, async (req, res, next) => {
         model: z.string().optional(),
         condition: z.string().optional(),
         specifications: z.unknown().optional(),
+        imageUrls: z.array(z.string()).min(1).optional(),
         status: z.enum(["ACTIVE", "SOLD", "DRAFT", "ARCHIVED"]).optional(),
         isPromoted: z.boolean().optional(),
       }),
       req.body,
     );
-    const data = { ...b, specifications: b.specifications as any } as any;
+    const { imageUrls, ...adFields } = b;
+    const data = { ...adFields, specifications: b.specifications as any } as any;
     res.json({
       success: true,
-      data: await prisma.ad.update({
-        where: { id },
-        data,
-        include: adInclude,
+      data: await prisma.$transaction(async (tx) => {
+        if (imageUrls) {
+          await tx.adImage.deleteMany({ where: { adId: id } });
+        }
+
+        return tx.ad.update({
+          where: { id },
+          data: {
+            ...data,
+            ...(imageUrls ? { images: { createMany: { data: imageUrls.map((url) => ({ url })) } } } : {}),
+          },
+          include: adInclude,
+        });
       }),
     });
   } catch (e) {

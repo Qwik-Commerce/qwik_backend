@@ -1,20 +1,50 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+const crypto_1 = __importDefault(require("crypto"));
+const path_1 = __importDefault(require("path"));
+const promises_1 = require("fs/promises");
 const express_1 = require("express");
-const multer_1 = __importDefault(require("multer"));
+const multer_1 = __importStar(require("multer"));
 const env_1 = require("../../config/env");
 const cloudinary_1 = require("../../lib/cloudinary");
+const auth_1 = require("../../middleware/auth");
 const router = (0, express_1.Router)();
-const upload = (0, multer_1.default)({
-    storage: multer_1.default.memoryStorage(),
-    limits: {
-        fileSize: 5 * 1024 * 1024,
-        files: 10,
-    },
-});
 const imageTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 const documentTypes = new Set([
     "application/pdf",
@@ -22,6 +52,21 @@ const documentTypes = new Set([
     "image/png",
     "image/webp",
 ]);
+const upload = (0, multer_1.default)({
+    storage: multer_1.default.memoryStorage(),
+    limits: {
+        fileSize: 5 * 1024 * 1024,
+        files: 10,
+    },
+    fileFilter: (_req, file, cb) => {
+        const validTypes = file.fieldname === "documents" ? documentTypes : imageTypes;
+        if (!validTypes.has(file.mimetype)) {
+            cb(new Error(`${file.originalname} has an unsupported file type`));
+            return;
+        }
+        cb(null, true);
+    },
+});
 function getFiles(req) {
     return (req.files ?? []);
 }
@@ -32,13 +77,39 @@ function rejectInvalidFiles(files, allowedTypes) {
     }
     return null;
 }
-function cloudinaryUnavailable(res) {
-    return res.status(503).json({
-        success: false,
-        message: "Uploads are unavailable because Cloudinary is not configured",
-    });
+function fileExtension(file) {
+    const fallback = file.mimetype.split("/")[1] || "bin";
+    return path_1.default.extname(file.originalname).replace(".", "") || fallback;
 }
-router.post("/images", upload.array("images", 10), async (req, res, next) => {
+async function saveLocalUpload(file, folder) {
+    const uploadDir = path_1.default.resolve("uploads", folder);
+    await (0, promises_1.mkdir)(uploadDir, { recursive: true });
+    const id = crypto_1.default.randomUUID();
+    const filename = `${id}.${fileExtension(file)}`;
+    await (0, promises_1.writeFile)(path_1.default.join(uploadDir, filename), file.buffer);
+    return {
+        id,
+        url: `/uploads/${folder}/${filename}`,
+    };
+}
+function normalizeUploadError(err, _req, res, next) {
+    if (err instanceof multer_1.MulterError) {
+        if (err.code === "LIMIT_FILE_SIZE") {
+            return res.status(400).json({ success: false, message: "Each file must be 5MB or smaller" });
+        }
+        if (err.code === "LIMIT_FILE_COUNT") {
+            return res.status(400).json({ success: false, message: "You can upload up to 10 files at a time" });
+        }
+        return res.status(400).json({ success: false, message: err.message });
+    }
+    if (err instanceof Error && err.message.includes("unsupported file type")) {
+        return res.status(400).json({ success: false, message: err.message });
+    }
+    next(err);
+}
+router.post("/images", auth_1.requireAuth, (req, res, next) => {
+    upload.array("images", 10)(req, res, (err) => normalizeUploadError(err, req, res, next));
+}, async (req, res, next) => {
     try {
         const files = getFiles(req);
         if (files.length === 0) {
@@ -48,24 +119,30 @@ router.post("/images", upload.array("images", 10), async (req, res, next) => {
         if (invalidMessage) {
             return res.status(400).json({ success: false, message: invalidMessage });
         }
-        if (!(0, cloudinary_1.isCloudinaryEnabled)()) {
-            return cloudinaryUnavailable(res);
-        }
-        const uploadedFiles = await Promise.all(files.map(async (file) => ({
-            name: file.originalname,
-            url: await (0, cloudinary_1.uploadImageBuffer)({
-                buffer: file.buffer,
-                folder: `${env_1.env.cloudinaryFolder}/images`,
-                filename: file.originalname,
-            }),
-            type: file.mimetype,
-            size: file.size,
-        })));
+        const uploadedAssets = await Promise.all(files.map(async (file) => {
+            const stored = (0, cloudinary_1.isCloudinaryEnabled)()
+                ? {
+                    id: crypto_1.default.randomUUID(),
+                    url: await (0, cloudinary_1.uploadImageBuffer)({
+                        buffer: file.buffer,
+                        folder: `${env_1.env.cloudinaryFolder}/images`,
+                        filename: file.originalname,
+                    }),
+                }
+                : await saveLocalUpload(file, "images");
+            return {
+                id: stored.id,
+                name: file.originalname,
+                url: stored.url,
+                type: file.mimetype,
+                size: file.size,
+            };
+        }));
         res.status(201).json({
             success: true,
             data: {
-                urls: uploadedFiles.map((file) => file.url),
-                files: uploadedFiles,
+                urls: uploadedAssets.map((file) => file.url),
+                assets: uploadedAssets,
             },
             message: "Upload successful",
         });
@@ -74,7 +151,9 @@ router.post("/images", upload.array("images", 10), async (req, res, next) => {
         next(e);
     }
 });
-router.post("/documents", upload.array("documents", 10), async (req, res, next) => {
+router.post("/documents", auth_1.requireAuth, (req, res, next) => {
+    upload.array("documents", 10)(req, res, (err) => normalizeUploadError(err, req, res, next));
+}, async (req, res, next) => {
     try {
         const files = getFiles(req);
         if (files.length === 0) {
@@ -84,25 +163,31 @@ router.post("/documents", upload.array("documents", 10), async (req, res, next) 
         if (invalidMessage) {
             return res.status(400).json({ success: false, message: invalidMessage });
         }
-        if (!(0, cloudinary_1.isCloudinaryEnabled)()) {
-            return cloudinaryUnavailable(res);
-        }
-        const uploadedFiles = await Promise.all(files.map(async (file) => ({
-            name: file.originalname,
-            url: await (0, cloudinary_1.uploadBuffer)({
-                buffer: file.buffer,
-                folder: `${env_1.env.cloudinaryFolder}/documents`,
-                filename: file.originalname,
-                resourceType: "auto",
-            }),
-            type: file.mimetype,
-            size: file.size,
-        })));
+        const documents = await Promise.all(files.map(async (file) => {
+            const stored = (0, cloudinary_1.isCloudinaryEnabled)()
+                ? {
+                    id: crypto_1.default.randomUUID(),
+                    url: await (0, cloudinary_1.uploadBuffer)({
+                        buffer: file.buffer,
+                        folder: `${env_1.env.cloudinaryFolder}/documents`,
+                        filename: file.originalname,
+                        resourceType: "auto",
+                    }),
+                }
+                : await saveLocalUpload(file, "documents");
+            return {
+                id: stored.id,
+                name: file.originalname,
+                url: stored.url,
+                type: file.mimetype,
+                size: file.size,
+                purpose: String(req.body?.purpose ?? "verification_document"),
+            };
+        }));
         res.status(201).json({
             success: true,
             data: {
-                urls: uploadedFiles.map((file) => file.url),
-                files: uploadedFiles,
+                documents,
             },
             message: "Upload successful",
         });

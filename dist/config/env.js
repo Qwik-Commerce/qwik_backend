@@ -8,7 +8,12 @@ for (const key of required) {
     if (!process.env[key])
         throw new Error(`Missing required environment variable: ${key}`);
 }
-const cloudinaryEnabled = Boolean(process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET);
+function hasCloudinaryValue(value, placeholder) {
+    return Boolean(value && value !== placeholder && !value.startsWith("your_"));
+}
+const cloudinaryEnabled = hasCloudinaryValue(process.env.CLOUDINARY_CLOUD_NAME, "your_cloud_name") &&
+    hasCloudinaryValue(process.env.CLOUDINARY_API_KEY, "your_api_key") &&
+    hasCloudinaryValue(process.env.CLOUDINARY_API_SECRET, "your_api_secret");
 exports.env = {
     port: Number(process.env.PORT ?? 4000),
     jwtSecret: process.env.JWT_SECRET,

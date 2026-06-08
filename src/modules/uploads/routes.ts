@@ -1,24 +1,13 @@
-import { Router, type Response } from "express";
-import multer from "multer";
+import crypto from "crypto";
+import path from "path";
+import { mkdir, writeFile } from "fs/promises";
+import { Router, type NextFunction, type Request, type Response } from "express";
+import multer, { MulterError } from "multer";
 import { env } from "../../config/env";
 import { isCloudinaryEnabled, uploadBuffer, uploadImageBuffer } from "../../lib/cloudinary";
+import { requireAuth } from "../../middleware/auth";
 
 const router = Router();
-
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: {
-    fileSize: 5 * 1024 * 1024,
-    files: 10,
-  },
-});
-
-type UploadedFile = {
-  name: string;
-  url: string;
-  type: string;
-  size: number;
-};
 
 const imageTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 const documentTypes = new Set([
@@ -28,7 +17,31 @@ const documentTypes = new Set([
   "image/webp",
 ]);
 
-function getFiles(req: Express.Request) {
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 5 * 1024 * 1024,
+    files: 10,
+  },
+  fileFilter: (_req, file, cb) => {
+    const validTypes = file.fieldname === "documents" ? documentTypes : imageTypes;
+    if (!validTypes.has(file.mimetype)) {
+      cb(new Error(`${file.originalname} has an unsupported file type`));
+      return;
+    }
+    cb(null, true);
+  },
+});
+
+type UploadedAsset = {
+  id: string;
+  name: string;
+  url: string;
+  type: string;
+  size: number;
+};
+
+function getFiles(req: Request) {
   return (req.files ?? []) as Express.Multer.File[];
 }
 
@@ -40,98 +53,152 @@ function rejectInvalidFiles(files: Express.Multer.File[], allowedTypes: Set<stri
   return null;
 }
 
-function cloudinaryUnavailable(res: Response) {
-  return res.status(503).json({
-    success: false,
-    message: "Uploads are unavailable because Cloudinary is not configured",
-  });
+function fileExtension(file: Express.Multer.File) {
+  const fallback = file.mimetype.split("/")[1] || "bin";
+  return path.extname(file.originalname).replace(".", "") || fallback;
 }
 
-router.post("/images", upload.array("images", 10), async (req, res, next) => {
-  try {
-    const files = getFiles(req);
+async function saveLocalUpload(file: Express.Multer.File, folder: "images" | "documents") {
+  const uploadDir = path.resolve("uploads", folder);
+  await mkdir(uploadDir, { recursive: true });
+  const id = crypto.randomUUID();
+  const filename = `${id}.${fileExtension(file)}`;
+  await writeFile(path.join(uploadDir, filename), file.buffer);
+  return {
+    id,
+    url: `/uploads/${folder}/${filename}`,
+  };
+}
 
-    if (files.length === 0) {
-      return res.status(400).json({ success: false, message: "At least one image file is required" });
+function normalizeUploadError(err: unknown, _req: Request, res: Response, next: NextFunction) {
+  if (err instanceof MulterError) {
+    if (err.code === "LIMIT_FILE_SIZE") {
+      return res.status(400).json({ success: false, message: "Each file must be 5MB or smaller" });
     }
-
-    const invalidMessage = rejectInvalidFiles(files, imageTypes);
-    if (invalidMessage) {
-      return res.status(400).json({ success: false, message: invalidMessage });
+    if (err.code === "LIMIT_FILE_COUNT") {
+      return res.status(400).json({ success: false, message: "You can upload up to 10 files at a time" });
     }
-
-    if (!isCloudinaryEnabled()) {
-      return cloudinaryUnavailable(res);
-    }
-
-    const uploadedFiles: UploadedFile[] = await Promise.all(
-      files.map(async (file) => ({
-        name: file.originalname,
-        url: await uploadImageBuffer({
-          buffer: file.buffer,
-          folder: `${env.cloudinaryFolder}/images`,
-          filename: file.originalname,
-        }),
-        type: file.mimetype,
-        size: file.size,
-      })),
-    );
-
-    res.status(201).json({
-      success: true,
-      data: {
-        urls: uploadedFiles.map((file) => file.url),
-        files: uploadedFiles,
-      },
-      message: "Upload successful",
-    });
-  } catch (e) {
-    next(e);
+    return res.status(400).json({ success: false, message: err.message });
   }
-});
 
-router.post("/documents", upload.array("documents", 10), async (req, res, next) => {
-  try {
-    const files = getFiles(req);
-
-    if (files.length === 0) {
-      return res.status(400).json({ success: false, message: "At least one document file is required" });
-    }
-
-    const invalidMessage = rejectInvalidFiles(files, documentTypes);
-    if (invalidMessage) {
-      return res.status(400).json({ success: false, message: invalidMessage });
-    }
-
-    if (!isCloudinaryEnabled()) {
-      return cloudinaryUnavailable(res);
-    }
-
-    const uploadedFiles: UploadedFile[] = await Promise.all(
-      files.map(async (file) => ({
-        name: file.originalname,
-        url: await uploadBuffer({
-          buffer: file.buffer,
-          folder: `${env.cloudinaryFolder}/documents`,
-          filename: file.originalname,
-          resourceType: "auto",
-        }),
-        type: file.mimetype,
-        size: file.size,
-      })),
-    );
-
-    res.status(201).json({
-      success: true,
-      data: {
-        urls: uploadedFiles.map((file) => file.url),
-        files: uploadedFiles,
-      },
-      message: "Upload successful",
-    });
-  } catch (e) {
-    next(e);
+  if (err instanceof Error && err.message.includes("unsupported file type")) {
+    return res.status(400).json({ success: false, message: err.message });
   }
-});
+
+  next(err);
+}
+
+router.post(
+  "/images",
+  requireAuth,
+  (req, res, next) => {
+    upload.array("images", 10)(req, res, (err) => normalizeUploadError(err, req, res, next));
+  },
+  async (req, res, next) => {
+    try {
+      const files = getFiles(req);
+
+      if (files.length === 0) {
+        return res.status(400).json({ success: false, message: "At least one image file is required" });
+      }
+
+      const invalidMessage = rejectInvalidFiles(files, imageTypes);
+      if (invalidMessage) {
+        return res.status(400).json({ success: false, message: invalidMessage });
+      }
+
+      const uploadedAssets: UploadedAsset[] = await Promise.all(
+        files.map(async (file) => {
+          const stored = isCloudinaryEnabled()
+            ? {
+                id: crypto.randomUUID(),
+                url: await uploadImageBuffer({
+                  buffer: file.buffer,
+                  folder: `${env.cloudinaryFolder}/images`,
+                  filename: file.originalname,
+                }),
+              }
+            : await saveLocalUpload(file, "images");
+
+          return {
+            id: stored.id,
+            name: file.originalname,
+            url: stored.url,
+            type: file.mimetype,
+            size: file.size,
+          };
+        }),
+      );
+
+      res.status(201).json({
+        success: true,
+        data: {
+          urls: uploadedAssets.map((file) => file.url),
+          assets: uploadedAssets,
+        },
+        message: "Upload successful",
+      });
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+router.post(
+  "/documents",
+  requireAuth,
+  (req, res, next) => {
+    upload.array("documents", 10)(req, res, (err) => normalizeUploadError(err, req, res, next));
+  },
+  async (req, res, next) => {
+    try {
+      const files = getFiles(req);
+
+      if (files.length === 0) {
+        return res.status(400).json({ success: false, message: "At least one document file is required" });
+      }
+
+      const invalidMessage = rejectInvalidFiles(files, documentTypes);
+      if (invalidMessage) {
+        return res.status(400).json({ success: false, message: invalidMessage });
+      }
+
+      const documents: Array<UploadedAsset & { purpose: string }> = await Promise.all(
+        files.map(async (file) => {
+          const stored = isCloudinaryEnabled()
+            ? {
+                id: crypto.randomUUID(),
+                url: await uploadBuffer({
+                  buffer: file.buffer,
+                  folder: `${env.cloudinaryFolder}/documents`,
+                  filename: file.originalname,
+                  resourceType: "auto",
+                }),
+              }
+            : await saveLocalUpload(file, "documents");
+
+          return {
+            id: stored.id,
+            name: file.originalname,
+            url: stored.url,
+            type: file.mimetype,
+            size: file.size,
+            purpose: String(req.body?.purpose ?? "verification_document"),
+          };
+        }),
+      );
+
+      res.status(201).json({
+        success: true,
+        data: {
+          documents,
+        },
+        message: "Upload successful",
+      });
+    } catch (e) {
+      next(e);
+    }
+  },
+);
 
 export default router;

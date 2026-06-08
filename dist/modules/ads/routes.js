@@ -217,16 +217,26 @@ router.patch("/:id", auth_1.requireAuth, async (req, res, next) => {
             model: zod_1.z.string().optional(),
             condition: zod_1.z.string().optional(),
             specifications: zod_1.z.unknown().optional(),
+            imageUrls: zod_1.z.array(zod_1.z.string()).min(1).optional(),
             status: zod_1.z.enum(["ACTIVE", "SOLD", "DRAFT", "ARCHIVED"]).optional(),
             isPromoted: zod_1.z.boolean().optional(),
         }), req.body);
-        const data = { ...b, specifications: b.specifications };
+        const { imageUrls, ...adFields } = b;
+        const data = { ...adFields, specifications: b.specifications };
         res.json({
             success: true,
-            data: await prisma_1.prisma.ad.update({
-                where: { id },
-                data,
-                include: adInclude,
+            data: await prisma_1.prisma.$transaction(async (tx) => {
+                if (imageUrls) {
+                    await tx.adImage.deleteMany({ where: { adId: id } });
+                }
+                return tx.ad.update({
+                    where: { id },
+                    data: {
+                        ...data,
+                        ...(imageUrls ? { images: { createMany: { data: imageUrls.map((url) => ({ url })) } } } : {}),
+                    },
+                    include: adInclude,
+                });
             }),
         });
     }
