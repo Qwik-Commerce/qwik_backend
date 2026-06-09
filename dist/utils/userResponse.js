@@ -19,6 +19,10 @@ function toAuthUser(user) {
         phone: user.phone,
         location: user.location,
         role: user.role,
+        termsAcceptedAt: user.termsAcceptedAt,
+        privacyAcceptedAt: user.privacyAcceptedAt,
+        termsVersion: user.termsVersion,
+        privacyVersion: user.privacyVersion,
         profile: {
             bio: user.profile?.bio ?? null,
             avatarUrl: user.profile?.avatarUrl ?? null,

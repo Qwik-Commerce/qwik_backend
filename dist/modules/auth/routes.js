@@ -13,12 +13,39 @@ const validation_1 = require("../../utils/validation");
 const auth_1 = require("../../middleware/auth");
 const userResponse_1 = require("../../utils/userResponse");
 const router = (0, express_1.Router)();
+const TERMS_VERSION = "2026-06-09";
+const PRIVACY_VERSION = "2026-06-09";
 router.post("/register", async (req, res, next) => {
     try {
-        const b = (0, validation_1.parseOrThrow)(zod_1.z.object({ email: zod_1.z.string().email(), password: zod_1.z.string().min(6), fullName: zod_1.z.string().min(2), phone: zod_1.z.string().optional(), location: zod_1.z.string().optional() }), req.body);
+        const b = (0, validation_1.parseOrThrow)(zod_1.z.object({
+            email: zod_1.z.string().email(),
+            password: zod_1.z.string().min(6),
+            fullName: zod_1.z.string().min(2),
+            phone: zod_1.z.string().optional(),
+            location: zod_1.z.string().optional(),
+            termsAccepted: zod_1.z.unknown().refine((value) => value === true, "Terms of Use must be accepted"),
+            privacyAccepted: zod_1.z.unknown().refine((value) => value === true, "Privacy Policy must be accepted"),
+            termsVersion: zod_1.z.string().optional(),
+            privacyVersion: zod_1.z.string().optional(),
+        }), req.body);
         if (await prisma_1.prisma.user.findUnique({ where: { email: b.email.toLowerCase() } }))
             return res.status(409).json({ success: false, message: "Email already in use" });
-        const user = await prisma_1.prisma.user.create({ data: { email: b.email.toLowerCase(), passwordHash: await bcrypt_1.default.hash(b.password, 10), fullName: b.fullName, phone: b.phone, location: b.location, profile: { create: {} } }, include: { profile: true } });
+        const acceptedAt = new Date();
+        const user = await prisma_1.prisma.user.create({
+            data: {
+                email: b.email.toLowerCase(),
+                passwordHash: await bcrypt_1.default.hash(b.password, 10),
+                fullName: b.fullName,
+                phone: b.phone,
+                location: b.location,
+                termsAcceptedAt: acceptedAt,
+                privacyAcceptedAt: acceptedAt,
+                termsVersion: TERMS_VERSION,
+                privacyVersion: PRIVACY_VERSION,
+                profile: { create: {} },
+            },
+            include: { profile: true },
+        });
         const token = (0, jwt_1.signAuthToken)({ userId: user.id, email: user.email });
         res.status(201).json({ success: true, data: { token, user: (0, userResponse_1.toAuthUser)(user) } });
     }

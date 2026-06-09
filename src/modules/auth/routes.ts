@@ -10,11 +10,39 @@ import { requireAuth } from "../../middleware/auth";
 import { toAuthUser } from "../../utils/userResponse";
 
 const router = Router();
+const TERMS_VERSION = "2026-06-09";
+const PRIVACY_VERSION = "2026-06-09";
+
 router.post("/register", async (req, res, next) => {
   try {
-    const b = parseOrThrow(z.object({ email: z.string().email(), password: z.string().min(6), fullName: z.string().min(2), phone: z.string().optional(), location: z.string().optional() }), req.body);
+    const b = parseOrThrow(z.object({
+      email: z.string().email(),
+      password: z.string().min(6),
+      fullName: z.string().min(2),
+      phone: z.string().optional(),
+      location: z.string().optional(),
+      termsAccepted: z.unknown().refine((value) => value === true, "Terms of Use must be accepted"),
+      privacyAccepted: z.unknown().refine((value) => value === true, "Privacy Policy must be accepted"),
+      termsVersion: z.string().optional(),
+      privacyVersion: z.string().optional(),
+    }), req.body);
     if (await prisma.user.findUnique({ where: { email: b.email.toLowerCase() } })) return res.status(409).json({ success: false, message: "Email already in use" });
-    const user = await prisma.user.create({ data: { email: b.email.toLowerCase(), passwordHash: await bcrypt.hash(b.password, 10), fullName: b.fullName, phone: b.phone, location: b.location, profile: { create: {} } }, include: { profile: true } });
+    const acceptedAt = new Date();
+    const user = await prisma.user.create({
+      data: {
+        email: b.email.toLowerCase(),
+        passwordHash: await bcrypt.hash(b.password, 10),
+        fullName: b.fullName,
+        phone: b.phone,
+        location: b.location,
+        termsAcceptedAt: acceptedAt,
+        privacyAcceptedAt: acceptedAt,
+        termsVersion: TERMS_VERSION,
+        privacyVersion: PRIVACY_VERSION,
+        profile: { create: {} },
+      },
+      include: { profile: true },
+    });
     const token = signAuthToken({ userId: user.id, email: user.email });
     res.status(201).json({ success: true, data: { token, user: toAuthUser(user) } });
   } catch (e) { next(e); }
