@@ -5,6 +5,7 @@ const zod_1 = require("zod");
 const prisma_1 = require("../../lib/prisma");
 const auth_1 = require("../../middleware/auth");
 const validation_1 = require("../../utils/validation");
+const notifications_1 = require("../../utils/notifications");
 const router = (0, express_1.Router)();
 const userSelect = {
     id: true,
@@ -40,8 +41,8 @@ router.post("/", auth_1.requireAuth, async (req, res, next) => {
         if (!participant) {
             return res.status(403).json({ success: false, message: "Forbidden" });
         }
-        const [message] = await prisma_1.prisma.$transaction([
-            prisma_1.prisma.message.create({
+        const message = await prisma_1.prisma.$transaction(async (tx) => {
+            const created = await tx.message.create({
                 data: {
                     conversationId: body.conversationId,
                     senderId: currentUserId,
@@ -52,12 +53,26 @@ router.post("/", auth_1.requireAuth, async (req, res, next) => {
                         select: userSelect,
                     },
                 },
-            }),
-            prisma_1.prisma.conversation.update({
+            });
+            const conversation = await tx.conversation.update({
                 where: { id: body.conversationId },
+                include: {
+                    ad: { select: { title: true } },
+                    participants: {
+                        where: { userId: { not: currentUserId } },
+                        select: { userId: true },
+                    },
+                },
                 data: { updatedAt: new Date() },
-            }),
-        ]);
+            });
+            await Promise.all(conversation.participants.map((participant) => (0, notifications_1.createMessageNotification)({
+                recipientId: participant.userId,
+                senderName: created.sender.fullName,
+                conversationId: body.conversationId,
+                adTitle: conversation.ad?.title,
+            }, tx)));
+            return created;
+        });
         res.status(201).json({ success: true, data: message });
     }
     catch (e) {

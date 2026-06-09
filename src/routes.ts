@@ -7,6 +7,7 @@ import uploadRoutes from "./modules/uploads/routes";
 import adminRoutes from "./modules/admin/routes";
 import conversationRoutes from "./modules/conversations/routes";
 import messageRoutes from "./modules/messages/routes";
+import notificationRoutes from "./modules/notifications/routes";
 import verificationRoutes from "./modules/verification/routes";
 import paymentRoutes from "./modules/payments/routes";
 
@@ -20,6 +21,7 @@ router.use("/uploads", uploadRoutes);
 router.use("/admin", adminRoutes);
 router.use("/conversations", conversationRoutes);
 router.use("/messages", messageRoutes);
+router.use("/notifications", notificationRoutes);
 router.use("/verification", verificationRoutes);
 router.use("/payments", paymentRoutes);
 export default router;

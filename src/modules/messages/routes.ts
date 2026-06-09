@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "../../lib/prisma";
 import { requireAuth } from "../../middleware/auth";
 import { parseOrThrow } from "../../utils/validation";
+import { createMessageNotification } from "../../utils/notifications";
 
 const router = Router();
 
@@ -47,8 +48,8 @@ router.post("/", requireAuth, async (req, res, next) => {
       return res.status(403).json({ success: false, message: "Forbidden" });
     }
 
-    const [message] = await prisma.$transaction([
-      prisma.message.create({
+    const message = await prisma.$transaction(async (tx) => {
+      const created = await tx.message.create({
         data: {
           conversationId: body.conversationId,
           senderId: currentUserId,
@@ -59,12 +60,36 @@ router.post("/", requireAuth, async (req, res, next) => {
             select: userSelect,
           },
         },
-      }),
-      prisma.conversation.update({
+      });
+
+      const conversation = await tx.conversation.update({
         where: { id: body.conversationId },
+        include: {
+          ad: { select: { title: true } },
+          participants: {
+            where: { userId: { not: currentUserId } },
+            select: { userId: true },
+          },
+        },
         data: { updatedAt: new Date() },
-      }),
-    ]);
+      });
+
+      await Promise.all(
+        conversation.participants.map((participant) =>
+          createMessageNotification(
+            {
+              recipientId: participant.userId,
+              senderName: created.sender.fullName,
+              conversationId: body.conversationId,
+              adTitle: conversation.ad?.title,
+            },
+            tx,
+          ),
+        ),
+      );
+
+      return created;
+    });
 
     res.status(201).json({ success: true, data: message });
   } catch (e) {

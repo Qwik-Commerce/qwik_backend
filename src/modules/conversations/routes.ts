@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "../../lib/prisma";
 import { requireAuth } from "../../middleware/auth";
 import { parseOrThrow } from "../../utils/validation";
+import { createMessageNotification } from "../../utils/notifications";
 
 const router = Router();
 
@@ -222,19 +223,33 @@ router.post("/", requireAuth, async (req, res, next) => {
       })
     ).id;
 
-    await prisma.$transaction([
-      prisma.message.create({
+    await prisma.$transaction(async (tx) => {
+      const message = await tx.message.create({
         data: {
           conversationId,
           senderId: currentUserId,
           text: body.message.trim(),
         },
-      }),
-      prisma.conversation.update({
+        include: messageInclude,
+      });
+      const conversation = await tx.conversation.update({
         where: { id: conversationId },
+        include: {
+          ad: { select: { title: true } },
+        },
         data: { updatedAt: new Date() },
-      }),
-    ]);
+      });
+
+      await createMessageNotification(
+        {
+          recipientId: body.recipientId,
+          senderName: message.sender.fullName,
+          conversationId,
+          adTitle: conversation.ad?.title,
+        },
+        tx,
+      );
+    });
 
     const conversation = await loadConversationForUser(conversationId, currentUserId);
     if (!conversation) {

@@ -22,6 +22,14 @@ const sellerSelect = {
   },
 };
 const adInclude = { images: true, category: true, user: { select: sellerSelect } };
+const notificationSettingsSchema = z.object({
+  emailNotifications: z.boolean().optional(),
+  pushNotifications: z.boolean().optional(),
+  messageNotifications: z.boolean().optional(),
+  offerNotifications: z.boolean().optional(),
+  systemNotifications: z.boolean().optional(),
+});
+
 router.get("/me", requireAuth, async (req, res, next) => {
   try {
     const user = await prisma.user.findUnique({
@@ -61,6 +69,27 @@ router.get("/me/ads", requireAuth, async (req, res, next) => {
   } catch (e) { next(e); }
 });
 router.get("/me/saved", requireAuth, async (req, res, next) => { try { const s = await prisma.savedAd.findMany({ where: { userId: req.auth!.userId }, include: { ad: { include: adInclude } }, orderBy: { createdAt: "desc" } }); res.json({ success: true, data: s.map((x) => ({ ...x.ad, isSaved: true })) }); } catch (e) { next(e); } });
+router.get("/me/notification-settings", requireAuth, async (req, res, next) => {
+  try {
+    const settings = await prisma.notificationSettings.upsert({
+      where: { userId: req.auth!.userId },
+      create: { userId: req.auth!.userId },
+      update: {},
+    });
+    res.json({ success: true, data: settings });
+  } catch (e) { next(e); }
+});
+router.patch("/me/notification-settings", requireAuth, async (req, res, next) => {
+  try {
+    const b = parseOrThrow(notificationSettingsSchema, req.body);
+    const settings = await prisma.notificationSettings.upsert({
+      where: { userId: req.auth!.userId },
+      create: { userId: req.auth!.userId, ...b },
+      update: b,
+    });
+    res.json({ success: true, data: settings });
+  } catch (e) { next(e); }
+});
 router.get("/:id", async (req, res, next) => {
   try {
     const user = await prisma.user.findUnique({

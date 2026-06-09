@@ -5,6 +5,7 @@ const zod_1 = require("zod");
 const prisma_1 = require("../../lib/prisma");
 const auth_1 = require("../../middleware/auth");
 const validation_1 = require("../../utils/validation");
+const notifications_1 = require("../../utils/notifications");
 const router = (0, express_1.Router)();
 const userSelect = {
     id: true,
@@ -198,19 +199,29 @@ router.post("/", auth_1.requireAuth, async (req, res, next) => {
                 },
             },
         })).id;
-        await prisma_1.prisma.$transaction([
-            prisma_1.prisma.message.create({
+        await prisma_1.prisma.$transaction(async (tx) => {
+            const message = await tx.message.create({
                 data: {
                     conversationId,
                     senderId: currentUserId,
                     text: body.message.trim(),
                 },
-            }),
-            prisma_1.prisma.conversation.update({
+                include: messageInclude,
+            });
+            const conversation = await tx.conversation.update({
                 where: { id: conversationId },
+                include: {
+                    ad: { select: { title: true } },
+                },
                 data: { updatedAt: new Date() },
-            }),
-        ]);
+            });
+            await (0, notifications_1.createMessageNotification)({
+                recipientId: body.recipientId,
+                senderName: message.sender.fullName,
+                conversationId,
+                adTitle: conversation.ad?.title,
+            }, tx);
+        });
         const conversation = await loadConversationForUser(conversationId, currentUserId);
         if (!conversation) {
             return res.status(404).json({ success: false, message: "Conversation not found" });

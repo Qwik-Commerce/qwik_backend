@@ -23,6 +23,13 @@ const sellerSelect = {
     },
 };
 const adInclude = { images: true, category: true, user: { select: sellerSelect } };
+const notificationSettingsSchema = zod_1.z.object({
+    emailNotifications: zod_1.z.boolean().optional(),
+    pushNotifications: zod_1.z.boolean().optional(),
+    messageNotifications: zod_1.z.boolean().optional(),
+    offerNotifications: zod_1.z.boolean().optional(),
+    systemNotifications: zod_1.z.boolean().optional(),
+});
 router.get("/me", auth_1.requireAuth, async (req, res, next) => {
     try {
         const user = await prisma_1.prisma.user.findUnique({
@@ -78,6 +85,33 @@ router.get("/me/saved", auth_1.requireAuth, async (req, res, next) => { try {
 catch (e) {
     next(e);
 } });
+router.get("/me/notification-settings", auth_1.requireAuth, async (req, res, next) => {
+    try {
+        const settings = await prisma_1.prisma.notificationSettings.upsert({
+            where: { userId: req.auth.userId },
+            create: { userId: req.auth.userId },
+            update: {},
+        });
+        res.json({ success: true, data: settings });
+    }
+    catch (e) {
+        next(e);
+    }
+});
+router.patch("/me/notification-settings", auth_1.requireAuth, async (req, res, next) => {
+    try {
+        const b = (0, validation_1.parseOrThrow)(notificationSettingsSchema, req.body);
+        const settings = await prisma_1.prisma.notificationSettings.upsert({
+            where: { userId: req.auth.userId },
+            create: { userId: req.auth.userId, ...b },
+            update: b,
+        });
+        res.json({ success: true, data: settings });
+    }
+    catch (e) {
+        next(e);
+    }
+});
 router.get("/:id", async (req, res, next) => {
     try {
         const user = await prisma_1.prisma.user.findUnique({
