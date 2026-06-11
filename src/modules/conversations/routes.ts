@@ -4,6 +4,7 @@ import { prisma } from "../../lib/prisma";
 import { requireAuth } from "../../middleware/auth";
 import { parseOrThrow } from "../../utils/validation";
 import { createMessageNotification } from "../../utils/notifications";
+import { emitConversationUpdated, emitMessageNew, emitNotificationNew } from "../../lib/realtime";
 
 const router = Router();
 
@@ -223,33 +224,47 @@ router.post("/", requireAuth, async (req, res, next) => {
       })
     ).id;
 
-    await prisma.$transaction(async (tx) => {
-      const message = await tx.message.create({
-        data: {
-          conversationId,
-          senderId: currentUserId,
-          text: body.message.trim(),
-        },
-        include: messageInclude,
-      });
-      const conversation = await tx.conversation.update({
-        where: { id: conversationId },
-        include: {
-          ad: { select: { title: true } },
-        },
-        data: { updatedAt: new Date() },
+    const message = await prisma.message.create({
+      data: {
+        conversationId,
+        senderId: currentUserId,
+        text: body.message.trim(),
+      },
+      include: messageInclude,
+    });
+
+    const updatedConversation = await prisma.conversation.update({
+      where: { id: conversationId },
+      include: {
+        ad: { select: { title: true } },
+        participants: { select: { userId: true } },
+      },
+      data: { updatedAt: new Date() },
+    });
+
+    void createMessageNotification({
+      recipientId: body.recipientId,
+      senderName: message.sender.fullName,
+      conversationId,
+      adTitle: updatedConversation.ad?.title,
+    })
+      .then((notification) => {
+        if (notification) emitNotificationNew(body.recipientId, notification);
+      })
+      .catch((notificationError) => {
+        console.error("Failed to create message notification", notificationError);
       });
 
-      await createMessageNotification(
-        {
-          recipientId: body.recipientId,
-          senderName: message.sender.fullName,
-          conversationId,
-          adTitle: conversation.ad?.title,
-        },
-        tx,
-      );
-    });
+    const participantIds = updatedConversation.participants.map((participant) => participant.userId);
+    emitMessageNew(conversationId, message, [body.recipientId]);
+    emitConversationUpdated(
+      conversationId,
+      {
+        lastMessage: message,
+        lastMessageAt: message.createdAt,
+      },
+      participantIds,
+    );
 
     const conversation = await loadConversationForUser(conversationId, currentUserId);
     if (!conversation) {

@@ -4,6 +4,7 @@ import { prisma } from "../../lib/prisma";
 import { requireAuth } from "../../middleware/auth";
 import { parseOrThrow } from "../../utils/validation";
 import { createMessageNotification } from "../../utils/notifications";
+import { emitConversationUpdated, emitMessageNew, emitNotificationNew } from "../../lib/realtime";
 
 const router = Router();
 
@@ -48,48 +49,58 @@ router.post("/", requireAuth, async (req, res, next) => {
       return res.status(403).json({ success: false, message: "Forbidden" });
     }
 
-    const message = await prisma.$transaction(async (tx) => {
-      const created = await tx.message.create({
-        data: {
-          conversationId: body.conversationId,
-          senderId: currentUserId,
-          text: body.text.trim(),
+    const message = await prisma.message.create({
+      data: {
+        conversationId: body.conversationId,
+        senderId: currentUserId,
+        text: body.text.trim(),
+      },
+      include: {
+        sender: {
+          select: userSelect,
         },
-        include: {
-          sender: {
-            select: userSelect,
-          },
-        },
-      });
-
-      const conversation = await tx.conversation.update({
-        where: { id: body.conversationId },
-        include: {
-          ad: { select: { title: true } },
-          participants: {
-            where: { userId: { not: currentUserId } },
-            select: { userId: true },
-          },
-        },
-        data: { updatedAt: new Date() },
-      });
-
-      await Promise.all(
-        conversation.participants.map((participant) =>
-          createMessageNotification(
-            {
-              recipientId: participant.userId,
-              senderName: created.sender.fullName,
-              conversationId: body.conversationId,
-              adTitle: conversation.ad?.title,
-            },
-            tx,
-          ),
-        ),
-      );
-
-      return created;
+      },
     });
+
+    const conversation = await prisma.conversation.update({
+      where: { id: body.conversationId },
+      include: {
+        ad: { select: { title: true } },
+        participants: {
+          select: { userId: true },
+        },
+      },
+      data: { updatedAt: new Date() },
+    });
+
+    const participantIds = conversation.participants.map((participant) => participant.userId);
+    const recipientIds = participantIds.filter((userId) => userId !== currentUserId);
+
+    void Promise.all(
+      recipientIds.map(async (recipientId) => {
+        try {
+          const notification = await createMessageNotification({
+            recipientId,
+            senderName: message.sender.fullName,
+            conversationId: body.conversationId,
+            adTitle: conversation.ad?.title,
+          });
+          if (notification) emitNotificationNew(recipientId, notification);
+        } catch (notificationError) {
+          console.error("Failed to create message notification", notificationError);
+        }
+      }),
+    );
+
+    emitMessageNew(body.conversationId, message, recipientIds);
+    emitConversationUpdated(
+      body.conversationId,
+      {
+        lastMessage: message,
+        lastMessageAt: message.createdAt,
+      },
+      participantIds,
+    );
 
     res.status(201).json({ success: true, data: message });
   } catch (e) {

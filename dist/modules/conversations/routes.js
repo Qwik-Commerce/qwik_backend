@@ -6,6 +6,7 @@ const prisma_1 = require("../../lib/prisma");
 const auth_1 = require("../../middleware/auth");
 const validation_1 = require("../../utils/validation");
 const notifications_1 = require("../../utils/notifications");
+const realtime_1 = require("../../lib/realtime");
 const router = (0, express_1.Router)();
 const userSelect = {
     id: true,
@@ -199,29 +200,41 @@ router.post("/", auth_1.requireAuth, async (req, res, next) => {
                 },
             },
         })).id;
-        await prisma_1.prisma.$transaction(async (tx) => {
-            const message = await tx.message.create({
-                data: {
-                    conversationId,
-                    senderId: currentUserId,
-                    text: body.message.trim(),
-                },
-                include: messageInclude,
-            });
-            const conversation = await tx.conversation.update({
-                where: { id: conversationId },
-                include: {
-                    ad: { select: { title: true } },
-                },
-                data: { updatedAt: new Date() },
-            });
-            await (0, notifications_1.createMessageNotification)({
-                recipientId: body.recipientId,
-                senderName: message.sender.fullName,
+        const message = await prisma_1.prisma.message.create({
+            data: {
                 conversationId,
-                adTitle: conversation.ad?.title,
-            }, tx);
+                senderId: currentUserId,
+                text: body.message.trim(),
+            },
+            include: messageInclude,
         });
+        const updatedConversation = await prisma_1.prisma.conversation.update({
+            where: { id: conversationId },
+            include: {
+                ad: { select: { title: true } },
+                participants: { select: { userId: true } },
+            },
+            data: { updatedAt: new Date() },
+        });
+        void (0, notifications_1.createMessageNotification)({
+            recipientId: body.recipientId,
+            senderName: message.sender.fullName,
+            conversationId,
+            adTitle: updatedConversation.ad?.title,
+        })
+            .then((notification) => {
+            if (notification)
+                (0, realtime_1.emitNotificationNew)(body.recipientId, notification);
+        })
+            .catch((notificationError) => {
+            console.error("Failed to create message notification", notificationError);
+        });
+        const participantIds = updatedConversation.participants.map((participant) => participant.userId);
+        (0, realtime_1.emitMessageNew)(conversationId, message, [body.recipientId]);
+        (0, realtime_1.emitConversationUpdated)(conversationId, {
+            lastMessage: message,
+            lastMessageAt: message.createdAt,
+        }, participantIds);
         const conversation = await loadConversationForUser(conversationId, currentUserId);
         if (!conversation) {
             return res.status(404).json({ success: false, message: "Conversation not found" });
