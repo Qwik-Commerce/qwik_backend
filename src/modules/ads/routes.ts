@@ -65,6 +65,13 @@ function normalizeSlug(value: string) {
   return categoryAliases[slug] ?? slug;
 }
 
+function getLocationSearchTerms(value: string) {
+  const location = value.trim();
+  if (!location || location.toLowerCase() === "all nigeria") return [];
+  if (/^(fct\s+abuja|abuja)$/i.test(location)) return ["FCT Abuja", "Abuja"];
+  return [location];
+}
+
 async function getCategoryIds(input: {
   categoryId?: string;
   category?: string;
@@ -110,6 +117,16 @@ router.get("/", async (req, res, next) => {
     const minPrice = req.query.minPrice ? Number(req.query.minPrice) : undefined;
     const maxPrice = req.query.maxPrice ? Number(req.query.maxPrice) : undefined;
     const imagesLimit = req.query.imagesLimit ? Number(req.query.imagesLimit) : undefined;
+    const locationTerms = getLocationSearchTerms(location);
+    const searchFilters = search
+      ? [
+          { title: { contains: search, mode: "insensitive" as const } },
+          {
+            description: { contains: search, mode: "insensitive" as const },
+          },
+        ]
+      : [];
+    const locationFilters = locationTerms.map((term) => ({ location: { contains: term, mode: "insensitive" as const } }));
     const categoryIds = await getCategoryIds({
       categoryId: categoryId || undefined,
       category: category || undefined,
@@ -118,18 +135,13 @@ router.get("/", async (req, res, next) => {
 
     const where = {
       status: "ACTIVE" as const,
-      ...(search
+      ...(searchFilters.length || locationFilters.length
         ? {
-            OR: [
-              { title: { contains: search, mode: "insensitive" as const } },
-              {
-                description: { contains: search, mode: "insensitive" as const },
-              },
+            AND: [
+              ...(searchFilters.length ? [{ OR: searchFilters }] : []),
+              ...(locationFilters.length ? [{ OR: locationFilters }] : []),
             ],
           }
-        : {}),
-      ...(location
-        ? { location: { contains: location, mode: "insensitive" as const } }
         : {}),
       ...(categoryIds ? { categoryId: { in: categoryIds } } : {}),
       ...(minPrice !== undefined || maxPrice !== undefined

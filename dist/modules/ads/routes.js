@@ -62,6 +62,14 @@ function normalizeSlug(value) {
     const slug = value.trim().toLowerCase().replace(/&/g, "and").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
     return categoryAliases[slug] ?? slug;
 }
+function getLocationSearchTerms(value) {
+    const location = value.trim();
+    if (!location || location.toLowerCase() === "all nigeria")
+        return [];
+    if (/^(fct\s+abuja|abuja)$/i.test(location))
+        return ["FCT Abuja", "Abuja"];
+    return [location];
+}
 async function getCategoryIds(input) {
     if (input.subcategory) {
         const subcategory = await prisma_1.prisma.category.findUnique({
@@ -97,6 +105,16 @@ router.get("/", async (req, res, next) => {
         const minPrice = req.query.minPrice ? Number(req.query.minPrice) : undefined;
         const maxPrice = req.query.maxPrice ? Number(req.query.maxPrice) : undefined;
         const imagesLimit = req.query.imagesLimit ? Number(req.query.imagesLimit) : undefined;
+        const locationTerms = getLocationSearchTerms(location);
+        const searchFilters = search
+            ? [
+                { title: { contains: search, mode: "insensitive" } },
+                {
+                    description: { contains: search, mode: "insensitive" },
+                },
+            ]
+            : [];
+        const locationFilters = locationTerms.map((term) => ({ location: { contains: term, mode: "insensitive" } }));
         const categoryIds = await getCategoryIds({
             categoryId: categoryId || undefined,
             category: category || undefined,
@@ -104,18 +122,13 @@ router.get("/", async (req, res, next) => {
         });
         const where = {
             status: "ACTIVE",
-            ...(search
+            ...(searchFilters.length || locationFilters.length
                 ? {
-                    OR: [
-                        { title: { contains: search, mode: "insensitive" } },
-                        {
-                            description: { contains: search, mode: "insensitive" },
-                        },
+                    AND: [
+                        ...(searchFilters.length ? [{ OR: searchFilters }] : []),
+                        ...(locationFilters.length ? [{ OR: locationFilters }] : []),
                     ],
                 }
-                : {}),
-            ...(location
-                ? { location: { contains: location, mode: "insensitive" } }
                 : {}),
             ...(categoryIds ? { categoryId: { in: categoryIds } } : {}),
             ...(minPrice !== undefined || maxPrice !== undefined
