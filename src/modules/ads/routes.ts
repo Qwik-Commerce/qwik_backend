@@ -203,7 +203,7 @@ router.post("/", requireAuth, async (req, res, next) => {
         model: z.string().optional(),
         condition: z.string().optional(),
         specifications: z.unknown().optional(),
-        imageUrls: z.array(z.string()).min(1),
+        imageUrls: z.array(z.string()).min(4, "Please upload at least 4 product photos.").max(10),
       }),
       req.body,
     );
@@ -255,7 +255,7 @@ router.patch("/:id", requireAuth, async (req, res, next) => {
         model: z.string().optional(),
         condition: z.string().optional(),
         specifications: z.unknown().optional(),
-        imageUrls: z.array(z.string()).min(1).optional(),
+        imageUrls: z.array(z.string()).min(4, "Please upload at least 4 product photos.").max(10).optional(),
         status: z.enum(["ACTIVE", "SOLD", "DRAFT", "ARCHIVED"]).optional(),
         isPromoted: z.boolean().optional(),
       }),

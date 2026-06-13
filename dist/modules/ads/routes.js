@@ -189,7 +189,7 @@ router.post("/", auth_1.requireAuth, async (req, res, next) => {
             model: zod_1.z.string().optional(),
             condition: zod_1.z.string().optional(),
             specifications: zod_1.z.unknown().optional(),
-            imageUrls: zod_1.z.array(zod_1.z.string()).min(1),
+            imageUrls: zod_1.z.array(zod_1.z.string()).min(4, "Please upload at least 4 product photos.").max(10),
         }), req.body);
         const category = await prisma_1.prisma.category.findUnique({
             where: { id: b.categoryId },
@@ -237,7 +237,7 @@ router.patch("/:id", auth_1.requireAuth, async (req, res, next) => {
             model: zod_1.z.string().optional(),
             condition: zod_1.z.string().optional(),
             specifications: zod_1.z.unknown().optional(),
-            imageUrls: zod_1.z.array(zod_1.z.string()).min(1).optional(),
+            imageUrls: zod_1.z.array(zod_1.z.string()).min(4, "Please upload at least 4 product photos.").max(10).optional(),
             status: zod_1.z.enum(["ACTIVE", "SOLD", "DRAFT", "ARCHIVED"]).optional(),
             isPromoted: zod_1.z.boolean().optional(),
         }), req.body);
