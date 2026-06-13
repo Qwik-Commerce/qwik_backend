@@ -18,6 +18,7 @@ exports.env = {
     port: Number(process.env.PORT ?? 4000),
     jwtSecret: process.env.JWT_SECRET,
     frontendUrl: process.env.FRONTEND_URL ?? "http://localhost:5173",
+    publicUrl: process.env.PUBLIC_URL ?? process.env.BACKEND_URL ?? process.env.RENDER_EXTERNAL_URL ?? "",
     cloudinaryEnabled,
     cloudinaryCloudName: process.env.CLOUDINARY_CLOUD_NAME ?? "",
     cloudinaryApiKey: process.env.CLOUDINARY_API_KEY ?? "",

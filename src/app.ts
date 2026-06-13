@@ -13,6 +13,7 @@ const frontendOrigins = env.frontendUrl
   .filter(Boolean);
 
 app.disable("x-powered-by");
+app.set("trust proxy", 1);
 app.use((_req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "DENY");
@@ -39,7 +40,17 @@ app.use(cors({
 }));
 app.use(express.json({ limit: "2mb" }));
 app.use(requestLogger);
-app.use("/uploads", express.static(path.resolve("uploads")));
+app.use(
+  "/uploads",
+  express.static(path.resolve("uploads"), {
+    immutable: true,
+    maxAge: "7d",
+    setHeaders: (res) => {
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+    },
+  }),
+);
 app.use("/api", router);
 app.use(notFound);
 app.use(errorHandler);

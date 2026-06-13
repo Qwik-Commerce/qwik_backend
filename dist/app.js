@@ -17,6 +17,7 @@ const frontendOrigins = env_1.env.frontendUrl
     .map((origin) => origin.trim().replace(/\/$/, ""))
     .filter(Boolean);
 exports.app.disable("x-powered-by");
+exports.app.set("trust proxy", 1);
 exports.app.use((_req, res, next) => {
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("X-Frame-Options", "DENY");
@@ -42,7 +43,14 @@ exports.app.use((0, cors_1.default)({
 }));
 exports.app.use(express_1.default.json({ limit: "2mb" }));
 exports.app.use(requestLogger_1.requestLogger);
-exports.app.use("/uploads", express_1.default.static(path_1.default.resolve("uploads")));
+exports.app.use("/uploads", express_1.default.static(path_1.default.resolve("uploads"), {
+    immutable: true,
+    maxAge: "7d",
+    setHeaders: (res) => {
+        res.setHeader("Access-Control-Allow-Origin", "*");
+        res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+    },
+}));
 exports.app.use("/api", routes_1.default);
 exports.app.use(errors_1.notFound);
 exports.app.use(errors_1.errorHandler);

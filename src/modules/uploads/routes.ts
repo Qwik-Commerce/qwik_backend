@@ -9,6 +9,10 @@ import { requireAuth } from "../../middleware/auth";
 
 const router = Router();
 
+if (!isCloudinaryEnabled()) {
+  console.warn("Cloudinary is not configured; using local upload storage. Local files are suitable for development but are not reliable across Render deploys or restarts.");
+}
+
 const imageTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 const documentTypes = new Set([
   "application/pdf",
@@ -87,6 +91,15 @@ function fileExtension(file: UploadedFile) {
   return path.extname(file.originalname).replace(".", "") || fallback;
 }
 
+function publicOrigin(req: Request) {
+  if (env.publicUrl) return env.publicUrl.replace(/\/$/, "");
+  return `${req.protocol}://${req.get("host")}`;
+}
+
+function toPublicUploadUrl(req: Request, uploadPath: string) {
+  return `${publicOrigin(req)}${uploadPath.startsWith("/") ? uploadPath : `/${uploadPath}`}`;
+}
+
 async function saveLocalUpload(file: UploadedFile, folder: "images" | "documents") {
   const uploadDir = path.resolve("uploads", folder);
   await mkdir(uploadDir, { recursive: true });
@@ -95,7 +108,7 @@ async function saveLocalUpload(file: UploadedFile, folder: "images" | "documents
   await writeFile(path.join(uploadDir, filename), file.buffer);
   return {
     id,
-    url: `/uploads/${folder}/${filename}`,
+    path: `/uploads/${folder}/${filename}`,
   };
 }
 
@@ -153,11 +166,12 @@ router.post(
                 }),
               }
             : await saveLocalUpload(file, "images");
+          const url = "url" in stored ? stored.url : toPublicUploadUrl(req, stored.path);
 
           return {
             id: stored.id,
             name: file.originalname,
-            url: stored.url,
+            url,
             type: file.mimetype,
             size: file.size,
           };
@@ -210,11 +224,12 @@ router.post(
                 }),
               }
             : await saveLocalUpload(file, "documents");
+          const url = "url" in stored ? stored.url : toPublicUploadUrl(req, stored.path);
 
           return {
             id: stored.id,
             name: file.originalname,
-            url: stored.url,
+            url,
             type: file.mimetype,
             size: file.size,
             purpose: String(req.body?.purpose ?? "verification_document"),

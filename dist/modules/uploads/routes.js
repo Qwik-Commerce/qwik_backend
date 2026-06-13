@@ -12,6 +12,9 @@ const env_1 = require("../../config/env");
 const cloudinary_1 = require("../../lib/cloudinary");
 const auth_1 = require("../../middleware/auth");
 const router = (0, express_1.Router)();
+if (!(0, cloudinary_1.isCloudinaryEnabled)()) {
+    console.warn("Cloudinary is not configured; using local upload storage. Local files are suitable for development but are not reliable across Render deploys or restarts.");
+}
 const imageTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 const documentTypes = new Set([
     "application/pdf",
@@ -65,6 +68,14 @@ function fileExtension(file) {
     const fallback = file.mimetype.split("/")[1] || "bin";
     return path_1.default.extname(file.originalname).replace(".", "") || fallback;
 }
+function publicOrigin(req) {
+    if (env_1.env.publicUrl)
+        return env_1.env.publicUrl.replace(/\/$/, "");
+    return `${req.protocol}://${req.get("host")}`;
+}
+function toPublicUploadUrl(req, uploadPath) {
+    return `${publicOrigin(req)}${uploadPath.startsWith("/") ? uploadPath : `/${uploadPath}`}`;
+}
 async function saveLocalUpload(file, folder) {
     const uploadDir = path_1.default.resolve("uploads", folder);
     await (0, promises_1.mkdir)(uploadDir, { recursive: true });
@@ -73,7 +84,7 @@ async function saveLocalUpload(file, folder) {
     await (0, promises_1.writeFile)(path_1.default.join(uploadDir, filename), file.buffer);
     return {
         id,
-        url: `/uploads/${folder}/${filename}`,
+        path: `/uploads/${folder}/${filename}`,
     };
 }
 function normalizeUploadError(err, _req, res, next) {
@@ -116,10 +127,11 @@ router.post("/images", auth_1.requireAuth, (req, res, next) => {
                     }),
                 }
                 : await saveLocalUpload(file, "images");
+            const url = "url" in stored ? stored.url : toPublicUploadUrl(req, stored.path);
             return {
                 id: stored.id,
                 name: file.originalname,
-                url: stored.url,
+                url,
                 type: file.mimetype,
                 size: file.size,
             };
@@ -161,10 +173,11 @@ router.post("/documents", auth_1.requireAuth, (req, res, next) => {
                     }),
                 }
                 : await saveLocalUpload(file, "documents");
+            const url = "url" in stored ? stored.url : toPublicUploadUrl(req, stored.path);
             return {
                 id: stored.id,
                 name: file.originalname,
-                url: stored.url,
+                url,
                 type: file.mimetype,
                 size: file.size,
                 purpose: String(req.body?.purpose ?? "verification_document"),
